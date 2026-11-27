@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TimeLedger — Local Web Time Dashboard</title>
+  <link rel="stylesheet" href="../shared/styles.css" />
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <img src="../../icons/icon32.png" alt="TimeLedger" width="28" height="28" />
+        <div>
+          <div class="brand-title">TimeLedger</div>
+          <div class="brand-sub">100% local storage • Zero telemetry</div>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <span id="status-pill" class="status-pill">Checking...</span>
+        <button id="toggle-pause-btn" class="btn btn-sm" type="button">Pause</button>
+        <button id="refresh-btn" class="btn btn-sm" type="button" title="Flush active session and refresh">Refresh</button>
+        <button id="theme-btn" class="btn btn-sm" type="button" title="Cycle theme">Theme: Auto</button>
+      </div>
+    </header>
+
+    <nav class="nav-tabs" role="tablist">
+      <button type="button" class="nav-tab active" data-section="overview">Overview &amp; Websites</button>
+      <button type="button" class="nav-tab" data-section="pages">Pages &amp; Articles</button>
+      <button type="button" class="nav-tab" data-section="daily">Daily Log</button>
+      <button type="button" class="nav-tab" data-section="settings">Settings &amp; Data</button>
+    </nav>
+
+    <section id="filter-bar" class="filter-bar">
+      <div class="range-pills">
+        <button type="button" class="pill-btn" data-range="today">Today</button>
+        <button type="button" class="pill-btn" data-range="yesterday">Yesterday</button>
+        <button type="button" class="pill-btn active" data-range="7d">7 Days</button>
+        <button type="button" class="pill-btn" data-range="30d">30 Days</button>
+        <button type="button" class="pill-btn" data-range="all">All Time</button>
+        <button type="button" class="pill-btn" data-range="custom">Custom</button>
+      </div>
+
+      <div id="custom-dates" class="custom-dates hidden">
+        <input id="custom-start" type="date" aria-label="Start date" />
+        <span>to</span>
+        <input id="custom-end" type="date" aria-label="End date" />
+      </div>
+
+      <div class="filter-inputs">
+        <span id="domain-chip" class="domain-chip hidden">
+          <span id="domain-chip-label"></span>
+          <button id="clear-domain-btn" type="button" aria-label="Clear domain filter">×</button>
+        </span>
+        <input id="search-input" class="search-input" type="search" placeholder="Search domains, titles, or URLs..." />
+      </div>
+    </section>
+
+    <!-- OVERVIEW & WEBSITES -->
+    <section id="section-overview" class="page-section">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total Active Time</div>
+          <div class="kpi-value mono" id="kpi-total">0s</div>
+          <div class="kpi-sub" id="kpi-range-text">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Daily Average</div>
+          <div class="kpi-value mono" id="kpi-avg">0s</div>
+          <div class="kpi-sub" id="kpi-days-text">0 active days</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Websites Visited</div>
+          <div class="kpi-value mono" id="kpi-domains">0</div>
+          <div class="kpi-sub" id="kpi-top-site">Top: —</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Pages &amp; Articles</div>
+          <div class="kpi-value mono" id="kpi-pages">0</div>
+          <div class="kpi-sub" id="kpi-top-page">Longest: —</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Daily Activity</h2>
+          <span class="panel-meta" id="chart-meta"></span>
+        </div>
+        <div id="daily-chart" class="daily-chart"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Time by Website</h2>
+          <button id="export-domains-csv-btn" class="btn btn-sm" type="button">Export CSV</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Website</th>
+                <th>Time Spent</th>
+                <th>Share</th>
+                <th>Visits</th>
+                <th>Pages</th>
+                <th>Last Visited</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="domains-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAGES & ARTICLES -->
+    <section id="section-pages" class="page-section hidden">
+      <div class="panel">
+        <div class="panel-header pages-toolbar">
+          <div class="toolbar-left">
+            <h2 class="panel-title">Pages &amp; Articles</h2>
+            <span class="panel-meta" id="pages-count-meta">0 pages</span>
+          </div>
+          <div class="toolbar-right">
+            <div class="min-duration-pills" role="group" aria-label="Minimum duration filter">
+              <button type="button" class="pill-btn active" data-minms="0">All</button>
+              <button type="button" class="pill-btn" data-minms="30000">≥ 30s</button>
+              <button type="button" class="pill-btn" data-minms="120000">≥ 2m</button>
+              <button type="button" class="pill-btn" data-minms="300000">≥ 5m</button>
+              <button type="button" class="pill-btn" data-minms="900000">≥ 15m</button>
+            </div>
+            <select id="pages-sort" class="select-input" aria-label="Sort pages">
+              <option value="time">Sort: Time Spent ↓</option>
+              <option value="recent">Sort: Most Recent ↓</option>
+              <option value="visits">Sort: Most Visits ↓</option>
+            </select>
+            <button id="export-pages-csv-btn" class="btn btn-sm" type="button">Export CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Page / Article</th>
+                <th>Time Spent</th>
+                <th>Visits</th>
+                <th>Last Visited</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="pages-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- DAILY LOG -->
+    <section id="section-daily" class="page-section hidden">
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Daily Breakdown</h2>
+          <span class="panel-meta">Click any day to inspect its websites &amp; pages</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Total Active Time</th>
+                <th>Top Website</th>
+                <th>Websites</th>
+                <th>Pages</th>
+              </tr>
+            </thead>
+            <tbody id="daily-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS & DATA -->
+    <section id="section-settings" class="page-section hidden">
+      <div class="settings-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Tracking Preferences</h2>
+          </div>
+          <div class="settings-body">
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Pause when idle</div>
+                <div class="setting-desc">Stop counting when there is no keyboard or mouse activity</div>
+              </div>
+              <input id="setting-pause-idle" type="checkbox" />
+            </label>
+
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Idle timeout</div>
+                <div class="setting-desc">How long without input before pausing</div>
+              </div>
+              <select id="setting-idle-seconds" class="select-input">
+                <option value="30">30 seconds</option>
+                <option value="60">1 minute</option>
+                <option value="120">2 minutes</option>
+                <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
+              </select>
+            </label>
+
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Keep counting while playing audio/video</div>
+                <div class="setting-desc">Don't pause for idle if the active tab is producing audio</div>
+              </div>
+              <input id="setting-keep-audible" type="checkbox" />
+            </label>
+
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Strip tracking query parameters</div>
+                <div class="setting-desc">Remove utm_*, fbclid, gclid, etc. so the same article isn't split into duplicates</div>
+              </div>
+              <input id="setting-strip-tracking" type="checkbox" />
+            </label>
+
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Strip URL #hash fragments</div>
+                <div class="setting-desc">Aggregate heading anchors (#section) under the same page URL</div>
+              </div>
+              <input id="setting-strip-hash" type="checkbox" />
+            </label>
+
+            <label class="setting-row">
+              <div>
+                <div class="setting-title">Track Incognito windows (if permitted)</div>
+                <div class="setting-desc">Off by default. Requires enabling "Allow in Incognito" in chrome://extensions</div>
+              </div>
+              <input id="setting-track-incognito" type="checkbox" />
+            </label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Ignored Domains</h2>
+          </div>
+          <div class="settings-body">
+            <p class="setting-desc">Domains listed here (and their subdomains) are never recorded.</p>
+            <form id="ignore-domain-form" class="inline-form">
+              <input id="ignore-domain-input" class="search-input" type="text" placeholder="e.g. localhost or mail.google.com" />
+              <button class="btn btn-primary" type="submit">Add</button>
+            </form>
+            <div id="ignored-domains-list" class="ignored-list"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Local Storage &amp; Privacy</h2>
+          </div>
+          <div class="settings-body">
+            <div class="privacy-callout">
+              <strong>Privacy Guarantee:</strong> All data stays strictly inside <code>chrome.storage.local</code> on this device. TimeLedger makes zero external network requests and collects zero analytics.
+            </div>
+            <div class="storage-meter">
+              <div class="storage-meter-bar">
+                <div id="storage-meter-fill" class="storage-meter-fill" style="width: 0%"></div>
+              </div>
+              <div id="storage-stats-text" class="setting-desc mono">Calculating...</div>
+            </div>
+            <div class="data-actions">
+              <button id="export-json-btn" class="btn" type="button">Export Full JSON Backup</button>
+              <button id="clear-data-btn" class="btn btn-danger" type="button">Clear All Tracked Data</button>
+              <div id="clear-confirm-box" class="confirm-box hidden">
+                <span>Permanently delete all recorded history?</span>
+                <button id="confirm-clear-btn" class="btn btn-danger btn-sm" type="button">Yes, Delete All</button>
+                <button id="cancel-clear-btn" class="btn btn-sm" type="button">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

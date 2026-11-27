@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "TimeLedger — Local Web Time Tracker",
+  "short_name": "TimeLedger",
+  "version": "0.1.0",
+  "description": "Privacy-first local time tracker that aggregates how long you spend on each website and page. 100% local storage, zero telemetry.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "idle",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "src/background/service_worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "TimeLedger — View Today's Time",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/dashboard/dashboard.html#settings",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

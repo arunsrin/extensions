@@ -1,0 +1,34 @@
+# Build & Chrome Web Store packaging artifacts
+dist/
+*.zip
+*.crx
+*.pem
+
+# Dependencies & logs
+node_modules/
+logs/
+*.log
+npm-debug.log*
+
+# Environment & local overrides
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Worktrees & editors
+.worktrees/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sw?
+*.patch
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
