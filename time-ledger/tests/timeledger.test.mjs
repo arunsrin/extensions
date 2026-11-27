@@ -355,3 +355,49 @@ test('Manifest V3, CSP compliance, and local-only privacy audit', () => {
   };
   scanDir(path.join(ROOT, 'src'));
 });
+
+test('Negative inputs, incognito isolation, and domain purge boundaries', async () => {
+  assert.equal(parseTrackableUrl(null), null);
+  assert.equal(parseTrackableUrl(''), null);
+  assert.equal(parseTrackableUrl('not-a-valid-url'), null);
+  assert.equal(parseTrackableUrl('javascript:alert(1)'), null);
+  assert.equal(parseTrackableUrl('data:text/html,<h1>Hi</h1>'), null);
+
+  const h = createHarness();
+  const incognitoTab = {
+    id: 9,
+    windowId: 1,
+    active: true,
+    incognito: true,
+    url: 'https://private.example.org/secret',
+    title: 'Private',
+  };
+  h.putTab(incognitoTab);
+  await h.engine.initialize();
+  h.advanceMs(30_000);
+  const status = await h.engine.checkpointAndGetStatus();
+  assert.equal(status.isTracking, false);
+  assert.equal(status.pauseReason, 'incognito');
+  assert.equal((await h.storage.getAllDayBuckets()).length, 0);
+
+  // Switch to normal tab, accrue time, then purge domain
+  const normalTab = {
+    id: 10,
+    windowId: 1,
+    active: true,
+    incognito: false,
+    url: 'https://docs.example.com/guide',
+    title: 'Guide',
+  };
+  h.putTab(normalTab);
+  await h.engine.handleTabActivated({ tabId: 10, windowId: 1 });
+  h.advanceMs(25_000);
+  await h.engine.handleTabRemoved(10);
+
+  const beforePurge = await h.storage.getAllDayBuckets();
+  assert.equal(beforePurge[0].totalMs, 25_000);
+
+  await h.storage.purgeDomain('example.com');
+  const afterPurge = await h.storage.getAllDayBuckets();
+  assert.equal(afterPurge.length, 0);
+});

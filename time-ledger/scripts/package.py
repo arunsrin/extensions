@@ -1,7 +1,13 @@
 """Create a clean Chrome Web Store upload zip in dist/ containing only runtime files."""
 import json
 import os
+import sys
 import zipfile
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
