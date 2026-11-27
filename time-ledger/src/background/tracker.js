@@ -4,7 +4,7 @@ import {
   MAX_CHECKPOINT_DELTA_MS,
   SLEEP_FALLBACK_DELTA_MS,
 } from '../shared/constants.js';
-import { splitIntervalByLocalDay } from '../shared/time.js';
+import { getLocalDateKey, splitIntervalByLocalDay } from '../shared/time.js';
 import { parseTrackableUrl } from '../shared/url.js';
 
 /**
@@ -21,12 +21,25 @@ export class TrackerEngine {
     this.alarms = alarms;
     this.now = now;
     this._queue = Promise.resolve();
+    this._runtimeConfigured = false;
   }
 
   _enqueue(task) {
-    const next = this._queue.then(() => task(), () => task());
+    const run = async () => {
+      await this._ensureConfiguredUnlocked();
+      return task();
+    };
+    const next = this._queue.then(run, run);
     this._queue = next.catch(() => {});
     return next;
+  }
+
+  async _ensureConfiguredUnlocked() {
+    if (this._runtimeConfigured) return;
+    this._runtimeConfigured = true;
+    const settings = await this.storage.getSettings();
+    this.configureIdleDetection(settings);
+    await this.ensureHeartbeatAlarm();
   }
 
   /**
@@ -50,8 +63,7 @@ export class TrackerEngine {
 
     if (slices.length === 0 && countVisit) {
       // Initial visit record with 0ms duration so visits count is recorded even before first flush
-      const todayKey = splitIntervalByLocalDay(toMs - 1, toMs)[0]?.dateKey;
-      if (!todayKey) return;
+      const todayKey = getLocalDateKey(toMs);
       const bucket = await this.storage.getDayBucket(todayKey);
       this._applyToBucket(bucket, session, 0, toMs, true);
       await this.storage.saveDayBucket(todayKey, bucket);
@@ -115,10 +127,8 @@ export class TrackerEngine {
       await this._creditSessionInterval(session, session.lastCheckpointAt, atMs, {
         countVisit: false,
       });
-      session.lastCheckpointAt = Math.min(
-        atMs,
-        session.lastCheckpointAt + MAX_CHECKPOINT_DELTA_MS
-      );
+      // Advance checkpoint to actual current time so capped sleep gaps are never re-credited on later flushes.
+      session.lastCheckpointAt = atMs;
       await this.storage.setActiveSession(session);
     }
     return session;
@@ -173,13 +183,10 @@ export class TrackerEngine {
           countVisit: false,
         });
       } else if (titleChanged) {
-        const daySlices = splitIntervalByLocalDay(atMs - 1, atMs);
-        const todayKey = daySlices[0]?.dateKey;
-        if (todayKey) {
-          const bucket = await this.storage.getDayBucket(todayKey);
-          this._applyToBucket(bucket, current, 0, atMs, false);
-          await this.storage.saveDayBucket(todayKey, bucket);
-        }
+        const todayKey = getLocalDateKey(atMs);
+        const bucket = await this.storage.getDayBucket(todayKey);
+        this._applyToBucket(bucket, current, 0, atMs, false);
+        await this.storage.saveDayBucket(todayKey, bucket);
       }
 
       current.lastCheckpointAt = atMs;
@@ -237,22 +244,35 @@ export class TrackerEngine {
     }
 
     const activeTab = activeTabs[0] || null;
-
-    // Check idle state if enabled
-    if (settings.pauseOnIdle && settings.idleTimeoutSeconds >= 15 && this.idle?.queryState) {
-      try {
-        const idleState = await this.idle.queryState(settings.idleTimeoutSeconds);
-        const allowAudible = settings.keepTrackingWhenAudible && Boolean(activeTab?.audible);
-        if (idleState !== 'active' && !allowAudible) {
-          await this._pauseUnlocked('idle', atMs);
-          return;
-        }
-      } catch {
-        // Ignore idle query errors and continue
-      }
+    const idlePauseReason = await this._getIdlePauseReason(settings, activeTab);
+    if (idlePauseReason) {
+      await this._pauseUnlocked(idlePauseReason, atMs);
+      return;
     }
 
     await this._switchToTabUnlocked(activeTab, settings, atMs);
+  }
+
+  async _getIdlePauseReason(settings, tab) {
+    if (!this.idle?.queryState) return null;
+    const interval = Math.max(15, Number(settings.idleTimeoutSeconds) || 120);
+    let idleState;
+    try {
+      idleState = await this.idle.queryState(interval);
+    } catch {
+      return null;
+    }
+
+    if (idleState === 'locked') {
+      return 'screen-locked';
+    }
+    if (idleState === 'idle' && settings.pauseOnIdle) {
+      const allowAudible = settings.keepTrackingWhenAudible && Boolean(tab?.audible);
+      if (!allowAudible) {
+        return 'idle';
+      }
+    }
+    return null;
   }
 
   async ensureHeartbeatAlarm() {
@@ -276,11 +296,8 @@ export class TrackerEngine {
   }
 
   initialize() {
+    this._runtimeConfigured = false;
     return this._enqueue(async () => {
-      const settings = await this.storage.getSettings();
-      this.configureIdleDetection(settings);
-      await this.ensureHeartbeatAlarm();
-
       // Reconcile any leftover session from a previous browser run cleanly
       const atMs = this.now();
       await this._flushActiveSessionUnlocked(atMs);
@@ -317,6 +334,13 @@ export class TrackerEngine {
       } catch {
         tab = null;
       }
+
+      const idlePauseReason = await this._getIdlePauseReason(settings, tab);
+      if (idlePauseReason) {
+        await this._pauseUnlocked(idlePauseReason, atMs);
+        return;
+      }
+
       await this._switchToTabUnlocked(tab, settings, atMs);
     });
   }
@@ -330,7 +354,10 @@ export class TrackerEngine {
 
       const atMs = this.now();
       const settings = await this.storage.getSettings();
-      if (settings.trackingPaused) return;
+      if (settings.trackingPaused) {
+        await this._pauseUnlocked('manual', atMs);
+        return;
+      }
 
       let focusedWindow = null;
       try {
@@ -339,6 +366,12 @@ export class TrackerEngine {
         focusedWindow = null;
       }
       if (focusedWindow && (!focusedWindow.focused || focusedWindow.id !== tab.windowId)) {
+        return;
+      }
+
+      const idlePauseReason = await this._getIdlePauseReason(settings, tab);
+      if (idlePauseReason) {
+        await this._pauseUnlocked(idlePauseReason, atMs);
         return;
       }
 
@@ -438,6 +471,27 @@ export class TrackerEngine {
       const settings = await this.storage.getSettings();
       this.configureIdleDetection(settings);
       await this._syncWithBrowserUnlocked(this.now());
+    });
+  }
+
+  ignoreDomain(domain, purgeExisting = false) {
+    return this._enqueue(async () => {
+      const settings = await this.storage.getSettings();
+      const nextDomains = [...(settings.ignoredDomains || []), domain];
+      await this.storage.saveSettings({ ignoredDomains: nextDomains });
+      if (purgeExisting) {
+        await this.storage.purgeDomain(domain);
+      }
+      await this._syncWithBrowserUnlocked(this.now());
+    });
+  }
+
+  clearAllData() {
+    return this._enqueue(async () => {
+      const atMs = this.now();
+      await this.storage.setActiveSession(null);
+      await this.storage.clearAllDayBuckets();
+      await this._syncWithBrowserUnlocked(atMs);
     });
   }
 }

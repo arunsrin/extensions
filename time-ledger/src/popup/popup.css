@@ -36,6 +36,11 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.header-actions .status-pill {
+  max-width: 165px;
 }
 
 .hero-card {

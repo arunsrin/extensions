@@ -151,6 +151,14 @@ select {
   font-weight: 500;
   background: var(--surface-subtle);
   color: var(--text-muted);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.status-pill span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-pill.tracking {
@@ -168,6 +176,7 @@ select {
   height: 7px;
   border-radius: 50%;
   background: currentColor;
+  flex-shrink: 0;
 }
 
 .domain-badge {

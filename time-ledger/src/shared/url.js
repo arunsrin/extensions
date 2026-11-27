@@ -80,6 +80,10 @@ export function parseTrackableUrl(rawUrl, options = {}) {
     parsed.hash = '';
   }
 
+  // Strip any embedded credentials from stored URLs
+  parsed.username = '';
+  parsed.password = '';
+
   if (options.stripTrackingParams !== false && parsed.search) {
     const params = new URLSearchParams(parsed.search);
     let changed = false;
@@ -100,6 +104,19 @@ export function parseTrackableUrl(rawUrl, options = {}) {
     domain,
     protocol: parsed.protocol,
   };
+}
+
+/**
+ * Validate that a URL uses a safe navigable scheme before assigning to <a href>.
+ */
+export function isSafeHttpUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return ALLOWED_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
 }
 
 /**

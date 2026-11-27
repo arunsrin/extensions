@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Validate CI parity between local test scripts and .github/workflows/test.yml."""
+"""Validate CI parity across local test scripts (test.ps1, test.sh) and .github/workflows/test.yml."""
+import glob
 import os
 import sys
 
@@ -10,34 +11,64 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_FILE = os.path.join(ROOT_DIR, ".github", "workflows", "test.yml")
+PS_SCRIPT = os.path.join(ROOT_DIR, "scripts", "test.ps1")
+SH_SCRIPT = os.path.join(ROOT_DIR, "scripts", "test.sh")
+
+
+def active_lines(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        lines = []
+        for raw in f:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            lines.append(stripped)
+        return "\n".join(lines)
 
 
 def main():
-    if not os.path.exists(WORKFLOW_FILE):
-        print(f"Error: CI workflow not found at {WORKFLOW_FILE}", file=sys.stderr)
+    targets = {
+        ".github/workflows/test.yml": active_lines(WORKFLOW_FILE),
+        "scripts/test.ps1": active_lines(PS_SCRIPT),
+        "scripts/test.sh": active_lines(SH_SCRIPT),
+    }
+
+    for label, content in targets.items():
+        if content is None:
+            print(f"Error: Required runner file missing: {label}", file=sys.stderr)
+            sys.exit(1)
+
+    # Dynamically discover all test/runner scripts under scripts/
+    discovered = sorted(
+        os.path.basename(p)
+        for p in (
+            glob.glob(os.path.join(ROOT_DIR, "scripts", "test_*.py"))
+            + glob.glob(os.path.join(ROOT_DIR, "scripts", "test_*.js"))
+            + glob.glob(os.path.join(ROOT_DIR, "scripts", "run_*.py"))
+        )
+    )
+
+    if not discovered:
+        print("Error: No verification scripts discovered under scripts/", file=sys.stderr)
         sys.exit(1)
 
-    with open(WORKFLOW_FILE, "r", encoding="utf-8") as f:
-        workflow_content = f.read()
-
-    required_checks = [
-        ("run_extension_tests.py", "Extension unit tests and package verification"),
-        ("test_extensions_structure.py", "Extension directory structure, manifest, and spec validation"),
-        ("test_ci_parity.py", "CI parity check"),
-    ]
-
     missing = []
-    for snippet, desc in required_checks:
-        if snippet not in workflow_content:
-            missing.append(f"  - Missing {desc} ('{snippet}')")
+    for script_name in discovered:
+        for label, content in targets.items():
+            if script_name not in content:
+                missing.append(f"  - {script_name} missing from active commands in {label}")
 
     if missing:
-        print("❌ CI Parity Failure! Missing from .github/workflows/test.yml:", file=sys.stderr)
+        print("❌ CI Parity Failure!", file=sys.stderr)
         for item in missing:
             print(item, file=sys.stderr)
         sys.exit(1)
 
-    print("✓ CI Parity verified: All local validation steps are present in GitHub Actions CI.")
+    print(
+        f"✓ CI Parity verified: {len(discovered)} verification script(s) active across CI, test.ps1, and test.sh."
+    )
 
 
 if __name__ == "__main__":

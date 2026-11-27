@@ -12,16 +12,40 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IGNORED_DIRS = {".git", ".github", ".worktrees", "docs", "scripts", "dist", "node_modules"}
-REQUIRED_FILES = ("manifest.json", "README.md", "SPEC.md", "PRIVACY.md")
+REQUIRED_FILES = ("manifest.json", "README.md", "SPEC.md", "PRIVACY.md", "STORE_LISTING.md")
+
+
+def read_text(path):
+    if not os.path.exists(path):
+        return ""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def check_python_utf8_guard(py_file, label, errors):
+    py_src = read_text(py_file)
+    has_stdout = (
+        'sys.stdout.reconfigure(encoding="utf-8")' in py_src
+        or "sys.stdout.reconfigure(encoding='utf-8')" in py_src
+    )
+    has_stderr = (
+        'sys.stderr.reconfigure(encoding="utf-8")' in py_src
+        or "sys.stderr.reconfigure(encoding='utf-8')" in py_src
+    )
+    if not (has_stdout and has_stderr):
+        errors.append(
+            f"[{label}] Python script {os.path.basename(py_file)} missing UTF-8 stdout/stderr reconfigure guard."
+        )
 
 
 def main():
     errors = []
 
-    readme_path = os.path.join(ROOT_DIR, "README.md")
-    spec_path = os.path.join(ROOT_DIR, "SPEC.md")
-    readme_text = open(readme_path, "r", encoding="utf-8").read() if os.path.exists(readme_path) else ""
-    spec_text = open(spec_path, "r", encoding="utf-8").read() if os.path.exists(spec_path) else ""
+    readme_text = read_text(os.path.join(ROOT_DIR, "README.md"))
+    spec_text = read_text(os.path.join(ROOT_DIR, "SPEC.md"))
+
+    for py_file in sorted(glob.glob(os.path.join(ROOT_DIR, "scripts", "*.py"))):
+        check_python_utf8_guard(py_file, "root", errors)
 
     extensions = []
     for entry in sorted(os.listdir(ROOT_DIR)):
@@ -41,7 +65,8 @@ def main():
         manifest_path = os.path.join(ext_dir, "manifest.json")
         if os.path.exists(manifest_path):
             try:
-                manifest = json.load(open(manifest_path, "r", encoding="utf-8"))
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
                 if manifest.get("manifest_version") != 3:
                     errors.append(f"[{name}] manifest.json must use manifest_version 3.")
                 for field in ("name", "version", "description"):
@@ -54,15 +79,13 @@ def main():
         if not tests:
             errors.append(f"[{name}] Missing companion automated tests under tests/*.test.mjs")
 
-        for py_file in glob.glob(os.path.join(ext_dir, "scripts", "*.py")):
-            py_src = open(py_file, "r", encoding="utf-8").read()
-            if 'reconfigure(encoding="utf-8")' not in py_src and "reconfigure(encoding='utf-8')" not in py_src:
-                errors.append(f"[{name}] Python script {os.path.basename(py_file)} missing UTF-8 stdout reconfigure guard.")
+        for py_file in sorted(glob.glob(os.path.join(ext_dir, "scripts", "*.py"))):
+            check_python_utf8_guard(py_file, name, errors)
 
-        if name not in readme_text:
-            errors.append(f"[{name}] Extension not registered in root README.md.")
-        if name not in spec_text:
-            errors.append(f"[{name}] Extension not registered in root SPEC.md.")
+        if f"{name}/" not in readme_text:
+            errors.append(f"[{name}] Extension path '{name}/' not registered in root README.md.")
+        if f"{name}/" not in spec_text:
+            errors.append(f"[{name}] Extension path '{name}/' not registered in root SPEC.md.")
 
     if errors:
         print("❌ Extension structure validation failed:", file=sys.stderr)

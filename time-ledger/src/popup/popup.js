@@ -1,7 +1,8 @@
 import { aggregateBuckets, resolveDateRange } from '../shared/aggregator.js';
+import { PAUSE_LABELS } from '../shared/constants.js';
 import { createStorageClient } from '../shared/storage.js';
 import { formatDuration } from '../shared/time.js';
-import { domainColor, domainInitial } from '../shared/url.js';
+import { domainColor, domainInitial, isSafeHttpUrl } from '../shared/url.js';
 
 const storage = createStorageClient(chrome.storage.local);
 
@@ -11,17 +12,17 @@ const state = {
   status: null,
 };
 
-const PAUSE_LABELS = {
-  manual: 'Paused',
-  idle: 'Paused (Idle)',
-  'screen-locked': 'Paused (Locked)',
-  'window-unfocused': 'Unfocused',
-  'internal-page': 'Browser page',
-  'ignored-domain': 'Ignored site',
-  incognito: 'Incognito',
-  'tab-closed': 'Idle',
-  'no-active-tab': 'No tab',
-};
+function bindCardActivation(el, handler) {
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  el.addEventListener('click', handler);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handler();
+    }
+  });
+}
 
 function sendMessage(msg) {
   return new Promise((resolve) => {
@@ -129,7 +130,7 @@ function renderLists(agg) {
       right.append(time, pct);
 
       row.append(left, right);
-      row.addEventListener('click', () => {
+      bindCardActivation(row, () => {
         openDashboard(`#pages?domain=${encodeURIComponent(site.domain)}`);
       });
       sitesList.appendChild(row);
@@ -181,8 +182,10 @@ function renderLists(agg) {
       right.append(time, pct);
 
       row.append(left, right);
-      row.addEventListener('click', () => {
-        chrome.tabs.create({ url: page.url });
+      bindCardActivation(row, () => {
+        if (isSafeHttpUrl(page.url)) {
+          chrome.tabs.create({ url: page.url });
+        }
       });
       pagesList.appendChild(row);
     }
@@ -231,9 +234,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.range-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.range = btn.dataset.range;
-      document.querySelectorAll('.range-btn').forEach((b) =>
-        b.classList.toggle('active', b === btn)
-      );
+      document.querySelectorAll('.range-btn').forEach((b) => {
+        const active = b === btn;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', String(active));
+      });
       refresh();
     });
   });

@@ -127,20 +127,30 @@ export function aggregateBuckets(
 
     totalMs += dayTotalMs;
 
-    // Determine top domain for this day
+    // Determine filtered counts and top domain for this day
     let topDomain = null;
+    let filteredDomainCount = 0;
     for (const dom of dayDomains) {
+      if (!dom || !dom.domain) continue;
       if (normalizedDomainFilter && dom.domain !== normalizedDomainFilter) continue;
+      filteredDomainCount += 1;
       if (!topDomain || (dom.totalMs || 0) > (topDomain.totalMs || 0)) {
         topDomain = dom;
       }
     }
 
+    let filteredPageCount = 0;
+    for (const page of dayPages) {
+      if (!page || !page.url) continue;
+      if (normalizedDomainFilter && page.domain !== normalizedDomainFilter) continue;
+      filteredPageCount += 1;
+    }
+
     dailySeries.push({
       date: bucket.date,
       totalMs: dayTotalMs,
-      domainCount: dayDomains.length,
-      pageCount: dayPages.length,
+      domainCount: filteredDomainCount,
+      pageCount: filteredPageCount,
       topDomain: topDomain ? topDomain.domain : null,
       topDomainMs: topDomain ? topDomain.totalMs : 0,
     });
@@ -205,7 +215,7 @@ export function fillDailySeries(dailySeries, startDate, endDate) {
   let cursor = startDate;
   let guard = 0;
 
-  while (cursor <= endDate && guard < 400) {
+  while (cursor <= endDate && guard < 3660) {
     filled.push(
       byDate.get(cursor) || {
         date: cursor,
