@@ -8,7 +8,7 @@ import { aggregateBuckets, fillDailySeries, toCsv } from '../src/shared/aggregat
 import { HEARTBEAT_ALARM_NAME, SLEEP_FALLBACK_DELTA_MS } from '../src/shared/constants.js';
 import { createStorageClient } from '../src/shared/storage.js';
 import { formatDuration, getLocalDateKey, splitIntervalByLocalDay } from '../src/shared/time.js';
-import { isDomainIgnored, normalizeDomain, parseTrackableUrl } from '../src/shared/url.js';
+import { isDomainIgnored, isSafeHttpUrl, normalizeDomain, parseTrackableUrl } from '../src/shared/url.js';
 import { TrackerEngine } from '../src/background/tracker.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,6 +53,7 @@ function createHarness(initialNow = new Date(2026, 10, 27, 10, 0, 0).getTime()) 
   let idleState = 'active';
   const tabsMap = new Map();
   const alarmsMap = new Map();
+  const idleIntervals = [];
   const storageArea = createMockStorageArea();
   const storage = createStorageClient(storageArea);
 
@@ -77,7 +78,9 @@ function createHarness(initialNow = new Date(2026, 10, 27, 10, 0, 0).getTime()) 
       },
     },
     idle: {
-      setDetectionInterval() {},
+      setDetectionInterval(seconds) {
+        idleIntervals.push(seconds);
+      },
       async queryState() {
         return idleState;
       },
@@ -95,7 +98,9 @@ function createHarness(initialNow = new Date(2026, 10, 27, 10, 0, 0).getTime()) 
   return {
     engine,
     storage,
+    storageArea,
     alarmsMap,
+    idleIntervals,
     setNow(ms) {
       currentNow = ms;
     },
@@ -350,8 +355,150 @@ test('Manifest V3, CSP compliance, and local-only privacy audit', () => {
         assert.equal(/\bfetch\s*\(/.test(src), false, `Unexpected fetch() in ${full}`);
         assert.equal(/\bXMLHttpRequest\b/.test(src), false, `Unexpected XHR in ${full}`);
         assert.equal(/\bWebSocket\b/.test(src), false, `Unexpected WebSocket in ${full}`);
+        assert.equal(/\bsendBeacon\b/.test(src), false, `Unexpected sendBeacon in ${full}`);
       }
     }
   };
   scanDir(path.join(ROOT, 'src'));
+});
+
+test('Negative inputs, credential stripping, incognito isolation, and domain purge boundaries', async () => {
+  assert.equal(parseTrackableUrl(null), null);
+  assert.equal(parseTrackableUrl(''), null);
+  assert.equal(parseTrackableUrl('not-a-valid-url'), null);
+  assert.equal(parseTrackableUrl('javascript:alert(1)'), null);
+  assert.equal(parseTrackableUrl('data:text/html,<h1>Hi</h1>'), null);
+  assert.equal(isSafeHttpUrl('https://example.com/a'), true);
+  assert.equal(isSafeHttpUrl('javascript:alert(1)'), false);
+
+  const strippedCreds = parseTrackableUrl('https://user:secret@example.com/private');
+  assert.equal(strippedCreds.url, 'https://example.com/private');
+
+  const h = createHarness();
+  const incognitoTab = {
+    id: 9,
+    windowId: 1,
+    active: true,
+    incognito: true,
+    url: 'https://private.example.org/secret',
+    title: 'Private',
+  };
+  h.putTab(incognitoTab);
+  await h.engine.initialize();
+  h.advanceMs(30_000);
+  const status = await h.engine.checkpointAndGetStatus();
+  assert.equal(status.isTracking, false);
+  assert.equal(status.pauseReason, 'incognito');
+  assert.equal((await h.storage.getAllDayBuckets()).length, 0);
+
+  // Switch to normal tab, accrue time, then purge via serialized engine.ignoreDomain and clearAllData
+  const normalTab = {
+    id: 10,
+    windowId: 1,
+    active: true,
+    incognito: false,
+    url: 'https://docs.example.com/guide',
+    title: 'Guide',
+  };
+  h.putTab(normalTab);
+  await h.engine.handleTabActivated({ tabId: 10, windowId: 1 });
+  h.advanceMs(25_000);
+  await h.engine.handleTabRemoved(10);
+
+  const beforePurge = await h.storage.getAllDayBuckets();
+  assert.equal(beforePurge[0].totalMs, 25_000);
+
+  await h.engine.ignoreDomain('example.com', true);
+  const afterPurge = await h.storage.getAllDayBuckets();
+  assert.equal(afterPurge.length, 0);
+
+  await h.engine.clearAllData();
+  assert.equal(await h.storage.getActiveSession(), null);
+});
+
+test('Multi-flush sleep gaps never inflate, cold wake restores idle interval, and screen lock blocks tracking', async () => {
+  const h = createHarness();
+  await h.storage.saveSettings({ idleTimeoutSeconds: 300, pauseOnIdle: false, keepTrackingWhenAudible: true });
+
+  const tab = {
+    id: 1,
+    windowId: 1,
+    active: true,
+    audible: true,
+    url: 'https://example.org/article',
+    title: 'Article',
+  };
+  h.putTab(tab);
+
+  // Cold wake without calling initialize(): simulate service worker waking directly on checkpoint
+  await h.engine.checkpointAndGetStatus();
+  assert.deepEqual(h.idleIntervals, [300]);
+  assert.ok(h.alarmsMap.has(HEARTBEAT_ALARM_NAME));
+
+  // Start tracking tab, then simulate 8-hour sleep followed by multiple flushes
+  await h.engine.handleTabActivated({ tabId: 1, windowId: 1 });
+  h.advanceMs(8 * 60 * 60 * 1000);
+  await h.engine.checkpointAndGetStatus();
+  await h.engine.checkpointAndGetStatus();
+  await h.engine.handleAlarm({ name: HEARTBEAT_ALARM_NAME });
+
+  let buckets = await h.storage.getAllDayBuckets();
+  let total = buckets.reduce((sum, b) => sum + b.totalMs, 0);
+  assert.equal(total, SLEEP_FALLBACK_DELTA_MS);
+
+  // Screen locked must pause even when audible=true and pauseOnIdle=false
+  h.setIdleState('locked');
+  h.advanceMs(5_000);
+  await h.engine.handleAlarm({ name: HEARTBEAT_ALARM_NAME });
+  let status = await h.engine.checkpointAndGetStatus();
+  assert.equal(status.isTracking, false);
+  assert.equal(status.pauseReason, 'screen-locked');
+
+  // Tab update while screen-locked must NOT resume tracking
+  const updated = { ...tab, title: 'Updated While Locked' };
+  h.putTab(updated);
+  await h.engine.handleTabUpdated(1, { title: updated.title }, updated);
+  status = await h.engine.checkpointAndGetStatus();
+  assert.equal(status.isTracking, false);
+  assert.equal(status.pauseReason, 'screen-locked');
+});
+
+test('Exact midnight visit files under new day and domainFilter scopes dailySeries counts', async () => {
+  const midnight = new Date(2026, 10, 28, 0, 0, 0, 0).getTime();
+  const h = createHarness(midnight);
+  const tab = {
+    id: 1,
+    windowId: 1,
+    active: true,
+    url: 'https://midnight.example/post',
+    title: 'Midnight Post',
+  };
+  h.putTab(tab);
+  await h.engine.initialize();
+
+  const buckets = await h.storage.getAllDayBuckets();
+  assert.equal(buckets.length, 1);
+  assert.equal(buckets[0].date, '2026-11-28');
+  assert.equal(buckets[0].domains['midnight.example'].visits, 1);
+
+  const aggFiltered = aggregateBuckets(
+    [
+      {
+        date: '2026-11-28',
+        totalMs: 90_000,
+        domains: {
+          'a.com': { domain: 'a.com', totalMs: 60_000, visits: 1, lastVisitedAt: 10 },
+          'b.com': { domain: 'b.com', totalMs: 30_000, visits: 1, lastVisitedAt: 20 },
+        },
+        pages: {
+          'https://a.com/1': { url: 'https://a.com/1', domain: 'a.com', title: 'A1', totalMs: 60_000, visits: 1 },
+          'https://b.com/1': { url: 'https://b.com/1', domain: 'b.com', title: 'B1', totalMs: 20_000, visits: 1 },
+          'https://b.com/2': { url: 'https://b.com/2', domain: 'b.com', title: 'B2', totalMs: 10_000, visits: 1 },
+        },
+      },
+    ],
+    { domainFilter: 'a.com' }
+  );
+  assert.equal(aggFiltered.dailySeries[0].domainCount, 1);
+  assert.equal(aggFiltered.dailySeries[0].pageCount, 1);
 });

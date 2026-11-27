@@ -1,7 +1,13 @@
 """Create a clean Chrome Web Store upload zip in dist/ containing only runtime files."""
 import json
 import os
+import sys
 import zipfile
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -27,8 +33,11 @@ def main():
 
         for folder in INCLUDE_DIRS:
             base = os.path.join(ROOT, folder)
-            for dirpath, _, filenames in os.walk(base):
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = sorted(d for d in dirnames if d != "__pycache__" and not d.startswith("."))
                 for fname in sorted(filenames):
+                    if fname in {".DS_Store", "Thumbs.db", "Desktop.ini"} or fname.endswith((".pyc", ".pyo")):
+                        continue
                     abs_path = os.path.join(dirpath, fname)
                     rel_path = os.path.relpath(abs_path, ROOT).replace(os.sep, "/")
                     zf.write(abs_path, rel_path)

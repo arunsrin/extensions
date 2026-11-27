@@ -1,0 +1,33 @@
+name: Test and Verify
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run extension tests and packaging verification
+        run: python scripts/run_extension_tests.py
+
+      - name: Validate extension structure and specs
+        run: python scripts/test_extensions_structure.py
+
+      - name: Validate CI parity
+        run: python scripts/test_ci_parity.py

@@ -4,6 +4,7 @@ import {
   resolveDateRange,
   toCsv,
 } from '../shared/aggregator.js';
+import { PAUSE_LABELS } from '../shared/constants.js';
 import { createStorageClient } from '../shared/storage.js';
 import {
   formatCompactDuration,
@@ -11,8 +12,19 @@ import {
   formatRelativeTime,
   getLocalDateKey,
 } from '../shared/time.js';
-import { domainColor, domainInitial, normalizeDomain } from '../shared/url.js';
+import { domainColor, domainInitial, isSafeHttpUrl, normalizeDomain } from '../shared/url.js';
 import { PAGE_ACTIONS } from './actions.js';
+
+function bindActivate(el, handler) {
+  el.tabIndex = 0;
+  el.addEventListener('click', handler);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handler();
+    }
+  });
+}
 
 const storage = createStorageClient(chrome.storage.local);
 
@@ -104,7 +116,7 @@ function renderStatus(status) {
     label.textContent = 'Tracking Paused';
   } else {
     pill.className = 'status-pill';
-    label.textContent = 'Standby';
+    label.textContent = PAUSE_LABELS[status?.pauseReason] || 'Standby';
   }
   pill.appendChild(label);
   toggleBtn.textContent = status?.settings?.trackingPaused ? 'Resume Tracking' : 'Pause Tracking';
@@ -113,7 +125,9 @@ function renderStatus(status) {
 function switchSection(section) {
   state.section = section;
   document.querySelectorAll('.nav-tab').forEach((tab) => {
-    tab.classList.toggle('active', tab.dataset.section === section);
+    const active = tab.dataset.section === section;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
   });
   ['overview', 'pages', 'daily', 'settings'].forEach((name) => {
     document
@@ -188,7 +202,8 @@ function renderChart(agg, startDate, endDate) {
     lbl.textContent = series.length <= 14 ? day.date.slice(5) : day.date.slice(8);
 
     col.append(wrap, lbl);
-    col.addEventListener('click', () => {
+    col.setAttribute('role', 'button');
+    bindActivate(col, () => {
       state.range = 'custom';
       state.customStart = day.date;
       state.customEnd = day.date;
@@ -348,11 +363,14 @@ function renderPagesTable(agg) {
     badge.textContent = domainInitial(page.domain);
 
     const text = document.createElement('div');
+    text.className = 'cell-page-text';
     const link = document.createElement('a');
     link.className = 'page-title-link';
-    link.href = page.url;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
+    if (isSafeHttpUrl(page.url)) {
+      link.href = page.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
     link.textContent = page.title || page.url;
 
     const sub = document.createElement('div');
@@ -384,8 +402,12 @@ function renderPagesTable(agg) {
       btn.className = 'btn btn-sm';
       btn.textContent = action.label;
       btn.title = action.title || action.label;
-      btn.addEventListener('click', () => {
-        action.run({ page, helpers });
+      btn.addEventListener('click', async () => {
+        try {
+          await action.run({ page, helpers });
+        } catch (err) {
+          showToast(err?.message || 'Action failed');
+        }
       });
       actionWrap.appendChild(btn);
     }
@@ -437,7 +459,7 @@ function renderDailyTable(agg) {
     tdPages.className = 'mono';
     tdPages.textContent = String(row.pageCount);
 
-    tr.addEventListener('click', () => {
+    bindActivate(tr, () => {
       state.range = 'custom';
       state.customStart = row.date;
       state.customEnd = row.date;
@@ -484,11 +506,19 @@ async function renderSettings() {
       removeBtn.textContent = '×';
       removeBtn.title = `Remove ${dom}`;
       removeBtn.addEventListener('click', async () => {
-        const next = settings.ignoredDomains.filter((d) => d !== dom);
-        await storage.saveSettings({ ignoredDomains: next });
-        await sendMessage({ type: 'SETTINGS_UPDATED' });
-        await renderSettings();
-        showToast(`Removed ${dom}`);
+        try {
+          const next = settings.ignoredDomains.filter((d) => d !== dom);
+          await storage.saveSettings({ ignoredDomains: next });
+          const res = await sendMessage({ type: 'SETTINGS_UPDATED' });
+          if (res?.ok && res.status) {
+            state.status = res.status;
+            renderStatus(state.status);
+          }
+          await renderSettings();
+          showToast(`Removed ${dom}`);
+        } catch (err) {
+          showToast(err?.message || 'Failed to update ignored domains');
+        }
       });
       chip.append(txt, removeBtn);
       ignoredList.appendChild(chip);
@@ -691,9 +721,17 @@ function bindEvents() {
 
   // Settings listeners
   const savePref = async (patch) => {
-    await storage.saveSettings(patch);
-    await sendMessage({ type: 'SETTINGS_UPDATED' });
-    showToast('Settings saved');
+    try {
+      await storage.saveSettings(patch);
+      const res = await sendMessage({ type: 'SETTINGS_UPDATED' });
+      if (res?.ok && res.status) {
+        state.status = res.status;
+        renderStatus(state.status);
+      }
+      showToast('Settings saved');
+    } catch (err) {
+      showToast(err?.message || 'Failed to save settings');
+    }
   };
 
   document.getElementById('setting-pause-idle').addEventListener('change', (e) => {
@@ -725,14 +763,22 @@ function bindEvents() {
     const input = document.getElementById('ignore-domain-input');
     const domain = normalizeDomain(input.value);
     if (!domain) return;
-    const settings = await storage.getSettings();
-    await storage.saveSettings({
-      ignoredDomains: [...(settings.ignoredDomains || []), domain],
-    });
-    input.value = '';
-    await sendMessage({ type: 'SETTINGS_UPDATED' });
-    await renderSettings();
-    showToast(`Added ${domain} to ignored domains`);
+    try {
+      const settings = await storage.getSettings();
+      await storage.saveSettings({
+        ignoredDomains: [...(settings.ignoredDomains || []), domain],
+      });
+      input.value = '';
+      const res = await sendMessage({ type: 'SETTINGS_UPDATED' });
+      if (res?.ok && res.status) {
+        state.status = res.status;
+        renderStatus(state.status);
+      }
+      await renderSettings();
+      showToast(`Added ${domain} to ignored domains`);
+    } catch (err) {
+      showToast(err?.message || 'Failed to add ignored domain');
+    }
   });
 
   document.getElementById('export-json-btn').addEventListener('click', async () => {
@@ -753,11 +799,19 @@ function bindEvents() {
   });
 
   document.getElementById('confirm-clear-btn').addEventListener('click', async () => {
-    await storage.clearAllDayBuckets();
-    document.getElementById('clear-confirm-box').classList.add('hidden');
-    await loadAndRender();
-    await renderSettings();
-    showToast('All tracked history deleted');
+    try {
+      const res = await sendMessage({ type: 'CLEAR_ALL_DATA' });
+      if (!res?.ok) {
+        await storage.setActiveSession(null);
+        await storage.clearAllDayBuckets();
+      }
+      document.getElementById('clear-confirm-box').classList.add('hidden');
+      await loadAndRender();
+      await renderSettings();
+      showToast('All tracked history deleted');
+    } catch (err) {
+      showToast(err?.message || 'Failed to clear data');
+    }
   });
 }
 

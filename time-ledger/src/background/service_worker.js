@@ -66,14 +66,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
       case 'IGNORE_DOMAIN': {
-        const domain = message.domain;
-        const settings = await storage.getSettings();
-        const nextDomains = [...(settings.ignoredDomains || []), domain];
-        await storage.saveSettings({ ignoredDomains: nextDomains });
-        if (message.purgeExisting) {
-          await storage.purgeDomain(domain);
-        }
-        await engine.applySettingsUpdate();
+        await engine.ignoreDomain(message.domain, Boolean(message.purgeExisting));
+        const status = await engine.checkpointAndGetStatus();
+        sendResponse({ ok: true, status });
+        break;
+      }
+      case 'CLEAR_ALL_DATA': {
+        await engine.clearAllData();
         const status = await engine.checkpointAndGetStatus();
         sendResponse({ ok: true, status });
         break;

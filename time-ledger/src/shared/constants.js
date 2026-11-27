@@ -23,3 +23,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const STORAGE_QUOTA_BYTES = 10 * 1024 * 1024; // 10 MB standard chrome.storage.local quota
+
+export const PAUSE_LABELS = Object.freeze({
+  manual: 'Paused',
+  idle: 'Paused (Idle)',
+  'screen-locked': 'Paused (Locked)',
+  'window-unfocused': 'Unfocused',
+  'internal-page': 'Browser page',
+  'ignored-domain': 'Ignored site',
+  incognito: 'Incognito',
+  'tab-closed': 'Idle',
+  'no-active-tab': 'No tab',
+});
